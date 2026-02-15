@@ -11,10 +11,30 @@ class ImageDB:
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_path)
+        
+        # 1. 开启外键支持
         conn.execute("PRAGMA foreign_keys = ON")
+        
+        # 2. 【性能核心】开启 WAL 模式
+        # 允许读写并发，大幅提升吞吐量
+        conn.execute("PRAGMA journal_mode=WAL")
+        
+        # 3. 【速度核心】降低磁盘同步频率
+        # NORMAL 模式在大多数情况下是安全的，但在断电时可能丢失刚写入的几条数据
+        # 换来的是写入速度提升 10 倍以上
+        conn.execute("PRAGMA synchronous=NORMAL")
+        
+        # 4. 【大文件优化】开启内存映射 IO
+        # 允许 SQLite 使用内存映射访问 2GB+ 的数据库文件
+        conn.execute("PRAGMA mmap_size=30000000000") 
+        
+        # 5. 增加缓存大小 (单位是 page，默认 2000，设为 64000 约占用 256MB 内存)
+        # 牺牲一点内存换取查询速度
+        conn.execute("PRAGMA cache_size=-64000") 
+        
         conn.row_factory = sqlite3.Row
         return conn
-
+        
     def init_db(self):
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -38,6 +58,7 @@ class ImageDB:
             )
         ''')
 
+        # 图片-标签关联表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS image_tags (
                 image_id INTEGER,
@@ -49,6 +70,21 @@ class ImageDB:
                 FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE
             )
         ''')
+        
+        # =========================================================
+        # 【关键优化】千万级数据必须加的索引
+        # =========================================================
+        
+        # 1. 优化 "根据 Tag 找图片" 的速度
+        # 如果没有这个索引，查询 "所有含 'cat' 的图" 会全表扫描 3 亿行数据
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_tag_id ON image_tags (tag_id)')
+        
+        # 2. 优化 "按文件名搜索" 的速度
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_file_name ON images (file_name)')
+        
+        # 3. 优化 "按目录筛选" 的速度
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_dir_path ON images (dir_path)')
+        
         
         conn.commit()
         conn.close()
