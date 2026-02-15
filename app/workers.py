@@ -8,12 +8,12 @@ from database import ImageDB
 from utils import scan_directory_generator, is_image_file
 
 # ==========================================
-# 1. 导入图片工作线程
+# 1. 导入图片工作线程 (高效版)
 # ==========================================
 class ImportWorker(QThread):
-    progress_signal = Signal(int, int)  # (新增数, 总数-这里暂未用)
+    progress_signal = Signal(int, int)
     status_signal = Signal(str)
-    finished_signal = Signal(list)      # 修改：返回新增的 image_id 列表，便于后续自动打标
+    finished_signal = Signal(list)
     
     def __init__(self, db_path, target_paths, recursive=True):
         super().__init__()
@@ -23,36 +23,77 @@ class ImportWorker(QThread):
         self._is_running = True
 
     def run(self):
+        # 初始化 DB 实例
         db = ImageDB(self.db_path)
+        print(f"[Worker] Using DB Path: {db.db_path}")
+        
         count = 0
         added_ids = []
         self.status_signal.emit("正在准备扫描...")
         
-        for path in self.target_paths:
-            if not self._is_running: break
+        # 【关键】建立长连接，而不是在循环里反复 open/close
+        conn = db.get_connection_for_batch()
+        cursor = conn.cursor()
+        
+        try:
+            for path in self.target_paths:
+                if not self._is_running: break
+                
+                if os.path.isfile(path):
+                    if is_image_file(path):
+                        self._insert_one(cursor, path, added_ids)
+                        count += 1
+                        
+                elif os.path.isdir(path):
+                    self.status_signal.emit(f"扫描目录: {path}")
+                    for full_path, file_name, dir_path, size in scan_directory_generator(path, self.recursive):
+                        if not self._is_running: break
+                        
+                        self._insert_one(cursor, full_path, added_ids, file_name, dir_path, size)
+                        count += 1
+                        
+                        # 每 50 条提交一次，防止内存堆积，也防止全盘回滚
+                        if count % 50 == 0:
+                            conn.commit()
+                            self.progress_signal.emit(count, 0)
+                            self.status_signal.emit(f"已导入: {count} 张")
             
-            if os.path.isfile(path):
-                if is_image_file(path):
-                    self.status_signal.emit(f"导入: {os.path.basename(path)}")
-                    new_id = db.add_image(path, os.path.basename(path), os.path.dirname(path), os.path.getsize(path))
-                    if new_id != -1:
-                        added_ids.append(new_id)
-                        count += 1
-            elif os.path.isdir(path):
-                self.status_signal.emit(f"扫描目录: {path}")
-                for full_path, file_name, dir_path, size in scan_directory_generator(path, self.recursive):
-                    if not self._is_running: break
-                    
-                    new_id = db.add_image(full_path, file_name, dir_path, size)
-                    if new_id != -1:
-                        added_ids.append(new_id)
-                        count += 1
-                    
-                    if count % 10 == 0:
-                        self.progress_signal.emit(count, 0) 
-                        self.status_signal.emit(f"已导入: {count} 张")
+            # 最后提交剩余的数据
+            conn.commit()
+            print(f"[Worker] Import finished. Total: {count}, IDs gathered: {len(added_ids)}")
+            
+        except Exception as e:
+            print(f"[Worker Error] {e}")
+            conn.rollback()
+        finally:
+            conn.close()
 
         self.finished_signal.emit(added_ids)
+
+    def _insert_one(self, cursor, full_path, added_ids, file_name=None, dir_path=None, size=None):
+        """辅助函数：执行单条插入，不提交"""
+        if file_name is None:
+            file_name = os.path.basename(full_path)
+        if dir_path is None:
+            dir_path = os.path.dirname(full_path)
+        if size is None:
+            size = os.path.getsize(full_path)
+            
+        try:
+            # 插入
+            cursor.execute("INSERT OR IGNORE INTO images (file_path, file_name, dir_path, file_size) VALUES (?, ?, ?, ?)", 
+                           (full_path, file_name, dir_path, size))
+            
+            # 获取 ID (如果是新插入的，rowid就是ID；如果是忽略的，查询ID)
+            # 为了准确获取ID，我们还是查一次
+            cursor.execute("SELECT id FROM images WHERE file_path = ?", (full_path,))
+            row = cursor.fetchone()
+            if row:
+                img_id = row['id']
+                added_ids.append(img_id)
+                # print(f"[Debug] Inserted/Found ID: {img_id} - {file_name}")
+        except Exception as e:
+            print(f"[Insert Error] {e}")
 
     def stop(self):
         self._is_running = False
@@ -63,50 +104,41 @@ class ImportWorker(QThread):
 class ThumbnailWorker(QThread):
     thumbnail_ready = Signal(int, object) 
     finished_signal = Signal()
-    file_missing_signal = Signal(str) # 通知UI文件丢失
+    file_missing_signal = Signal(str) 
 
     def __init__(self, db_path, image_data_list, size=(256, 256)):
         super().__init__()
-        self.db_path = db_path # 需要DB路径来删除记录
+        self.db_path = db_path 
         self.image_data_list = image_data_list
         self.size = size
         self._is_running = True
 
     def run(self):
-        # 使用独立连接删除记录
         db = ImageDB(self.db_path)
-        
         for img_data in self.image_data_list:
             if not self._is_running: break
             
             file_path = img_data['file_path']
             img_id = img_data['id']
             
-            # 1. 检查文件是否存在
             if not os.path.exists(file_path):
-                # 自动删除逻辑
-                print(f"File not found: {file_path}, deleting from DB.")
+                # print(f"[WARN] File missing: {file_path}")
                 db.delete_image_by_id(img_id)
                 self.file_missing_signal.emit(file_path)
                 continue
 
-            # 2. 生成缩略图
             try:
                 with Image.open(file_path) as img:
                     img = ImageOps.exif_transpose(img)
                     if img.mode != "RGB":
                         img = img.convert("RGB")
-                    
                     img.thumbnail(self.size, Image.Resampling.LANCZOS)
-                    
                     data = img.tobytes("raw", "RGB")
                     qim = QImage(data, img.width, img.height, QImage.Format_RGB888)
                     pixmap = QPixmap.fromImage(qim)
-                    
                     self.thumbnail_ready.emit(img_id, pixmap)
             except Exception as e:
                 pass
-        
         self.finished_signal.emit()
 
     def stop(self):
@@ -121,9 +153,6 @@ class TaggerWorker(QThread):
     finished_signal = Signal()
     
     def __init__(self, db_path, image_ids, mode='ai', ai_engine=None, regex_pattern=None, tag_action='append'):
-        """
-        tag_action: 'overwrite' (清空后添加), 'append' (添加/更新), 'unique' (仅添加不重复)
-        """
         super().__init__()
         self.db_path = db_path
         self.image_ids = image_ids
@@ -136,19 +165,15 @@ class TaggerWorker(QThread):
     def run(self):
         db = ImageDB(self.db_path)
         total = len(self.image_ids)
-        
         if not self.image_ids:
             self.finished_signal.emit()
             return
 
-        # 1. 如果是覆盖模式，先批量清空这些图片的 Tag
         if self.tag_action == 'overwrite':
-            self.status_signal.emit("正在清理旧标签...")
             for img_id in self.image_ids:
                 if not self._is_running: break
                 db.clear_tags_for_image(img_id)
 
-        # 2. 获取图片信息
         conn = db.get_connection()
         cursor = conn.cursor()
         placeholders = ','.join(['?'] * len(self.image_ids))
@@ -159,11 +184,9 @@ class TaggerWorker(QThread):
         count = 0
         for row in rows:
             if not self._is_running: break
-            
             img_id = row['id']
             file_path = row['file_path']
             file_name = row['file_name']
-            
             tags_to_add = []
             
             if self.mode == 'ai' and self.ai_engine:
@@ -171,31 +194,23 @@ class TaggerWorker(QThread):
                     tags = self.ai_engine.predict(file_path)
                     tags_to_add = tags 
                 except Exception as e:
-                    print(f"AI Error {file_path}: {e}")
+                    print(f"[ERROR] AI: {e}")
 
             elif self.mode == 'regex' and self.regex_pattern:
                 import re
                 try:
-                    # 正则匹配
                     matches = re.findall(self.regex_pattern, file_name)
-                    # 结果去重
                     matches = list(set(matches))
                     tags_to_add = [(m, 1.0) for m in matches if m]
                 except Exception as e:
-                    print(f"Regex Error: {e}")
+                    print(f"[ERROR] Regex: {e}")
 
-            # 写入数据库
             if tags_to_add:
-                # 覆盖模式下，clear 已经在循环外做过了，这里 add 就行
-                # 但是为了逻辑复用，我们传给 db 的 mode 只有 'append' 和 'unique'
-                # 这里的 'overwrite' 已经在上面处理成了 '清空 + append'
                 db_mode = 'unique' if self.tag_action == 'unique' else 'append'
-                
                 for tag_name, conf in tags_to_add:
                     db.add_image_tag(img_id, tag_name, conf, 
                                      is_prediction=(1 if self.mode=='ai' else 0), 
                                      mode=db_mode)
-            
             count += 1
             if count % 5 == 0:
                 self.progress_signal.emit(count, total)

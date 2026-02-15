@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QLabel, QListWidget, QListWidgetItem, QFileDialog, 
                                QSplitter, QLineEdit, QProgressBar, QMessageBox, QTabWidget,
@@ -26,6 +27,9 @@ STYLE_SHEET = """
     QTabBar::tab:selected { background: #444; color: #fff; }
     QGroupBox { border: 1px solid #555; margin-top: 10px; }
     QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; }
+    QMenu { background-color: #333; border: 1px solid #555; }
+    QMenu::item { padding: 5px 20px; }
+    QMenu::item:selected { background-color: #0078d7; }
 """
 
 # ================= 对话框类 =================
@@ -37,20 +41,16 @@ class ImportDialog(QDialog):
         self.resize(400, 300)
         self.layout = QVBoxLayout(self)
         
-        # 1. 递归选项
         self.chk_recursive = QCheckBox("递归扫描子目录")
         self.chk_recursive.setChecked(True)
         self.layout.addWidget(self.chk_recursive)
         
-        # 2. 自动打标选项
         self.group_tag = QCheckBox("导入后立即自动打标")
         self.layout.addWidget(self.group_tag)
         
-        # 3. 打标配置 (默认隐藏)
         self.tag_options = QWidget()
         self.tag_layout = QVBoxLayout(self.tag_options)
         
-        # 模式
         self.lbl_mode = QLabel("打标模式:")
         self.tag_layout.addWidget(self.lbl_mode)
         self.btn_group_mode = QButtonGroup(self)
@@ -66,17 +66,14 @@ class ImportDialog(QDialog):
         self.tag_layout.addWidget(self.rb_overwrite)
         self.tag_layout.addWidget(self.rb_unique)
 
-        # 类型 (AI vs Regex) - 简化起见，导入时默认用 AI
         self.lbl_type = QLabel("注意：导入时仅支持 AI 自动打标")
         self.tag_layout.addWidget(self.lbl_type)
 
         self.layout.addWidget(self.tag_options)
         
-        # 连接
         self.group_tag.toggled.connect(self.tag_options.setVisible)
         self.tag_options.setVisible(False)
         
-        # 按钮
         btn_layout = QHBoxLayout()
         btn_ok = QPushButton("开始导入")
         btn_ok.clicked.connect(self.accept)
@@ -101,14 +98,12 @@ class BatchTagDialog(QDialog):
         self.resize(400, 350)
         self.layout = QVBoxLayout(self)
         
-        # 1. 方式选择
         self.cmb_method = QComboBox()
         self.cmb_method.addItem("AI 自动识别", "ai")
         self.cmb_method.addItem("正则表达式 (文件名)", "regex")
         self.layout.addWidget(QLabel("打标方式:"))
         self.layout.addWidget(self.cmb_method)
         
-        # 2. 正则输入框 (默认隐藏)
         self.regex_widget = QWidget()
         self.regex_layout = QVBoxLayout(self.regex_widget)
         self.regex_input = QLineEdit()
@@ -120,7 +115,6 @@ class BatchTagDialog(QDialog):
         
         self.cmb_method.currentIndexChanged.connect(self.on_method_change)
 
-        # 3. 模式选择
         self.layout.addWidget(QLabel("写入模式:"))
         self.btn_group = QButtonGroup(self)
         self.rb_append = QRadioButton("追加 (Append)")
@@ -135,7 +129,6 @@ class BatchTagDialog(QDialog):
         self.layout.addWidget(self.rb_overwrite)
         self.layout.addWidget(self.rb_unique)
         
-        # 按钮
         btn_layout = QHBoxLayout()
         btn_ok = QPushButton("开始")
         btn_ok.clicked.connect(self.accept)
@@ -172,13 +165,10 @@ class MainWindow(QMainWindow):
         
         self.db = ImageDB(self.db_path)
         
-        # 状态
         self.current_page = 1
         self.page_size = 50
         self.total_images = 0
         self.current_filters = {}
-        
-        # AI 引擎缓存
         self.ai_engine = None 
         
         self.init_ui()
@@ -192,12 +182,11 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         main_layout.addWidget(splitter)
         
-        # ================= 左侧面板 =================
+        # 左侧
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
-        # 工具栏
         tool_layout = QHBoxLayout()
         btn_import = QPushButton("导入")
         btn_import.clicked.connect(self.open_import_dialog)
@@ -207,36 +196,30 @@ class MainWindow(QMainWindow):
         tool_layout.addWidget(btn_batch)
         left_layout.addLayout(tool_layout)
         
-        # 搜索
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索文件名...")
         self.search_input.returnPressed.connect(self.apply_filters)
         left_layout.addWidget(self.search_input)
         
-        # 选项卡 (Tag | Folder)
         self.left_tabs = QTabWidget()
-        
-        # Tab 1: Tags
         self.tag_list_widget = QListWidget()
         self.tag_list_widget.setSelectionMode(QListWidget.MultiSelection)
         self.tag_list_widget.itemSelectionChanged.connect(self.apply_filters)
         self.left_tabs.addTab(self.tag_list_widget, "标签")
         
-        # Tab 2: Folders
         self.folder_list_widget = QListWidget()
         self.folder_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.folder_list_widget.customContextMenuRequested.connect(self.show_folder_menu)
-        self.folder_list_widget.itemClicked.connect(self.on_folder_clicked) # 单击筛选
+        self.folder_list_widget.itemClicked.connect(self.on_folder_clicked)
         self.left_tabs.addTab(self.folder_list_widget, "文件夹")
         
         left_layout.addWidget(self.left_tabs)
         splitter.addWidget(left_panel)
         
-        # ================= 中间面板 (图片网格) =================
+        # 中间
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
         
-        # 顶部栏 (页码控制)
         top_bar = QHBoxLayout()
         self.lbl_status = QLabel("就绪")
         
@@ -244,7 +227,7 @@ class MainWindow(QMainWindow):
         page_ctrl_layout.addWidget(QLabel("每页:"))
         self.cmb_page_size = QComboBox()
         self.cmb_page_size.addItems(["30", "50", "100", "200"])
-        self.cmb_page_size.setCurrentIndex(1) # default 50
+        self.cmb_page_size.setCurrentIndex(1)
         self.cmb_page_size.currentIndexChanged.connect(self.on_page_size_change)
         page_ctrl_layout.addWidget(self.cmb_page_size)
         
@@ -273,12 +256,10 @@ class MainWindow(QMainWindow):
         
         center_layout.addLayout(top_bar)
         
-        # 进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         center_layout.addWidget(self.progress_bar)
         
-        # 图片列表
         self.image_list_widget = QListWidget()
         self.image_list_widget.setViewMode(QListWidget.IconMode)
         self.image_list_widget.setIconSize(QSize(150, 150))
@@ -287,11 +268,16 @@ class MainWindow(QMainWindow):
         self.image_list_widget.setSelectionMode(QListWidget.ExtendedSelection)
         self.image_list_widget.itemDoubleClicked.connect(self.open_viewer)
         self.image_list_widget.itemSelectionChanged.connect(self.on_image_selected)
+        
+        # [NEW] 启用右键菜单
+        self.image_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.image_list_widget.customContextMenuRequested.connect(self.show_image_context_menu)
+        
         center_layout.addWidget(self.image_list_widget)
         
         splitter.addWidget(center_panel)
         
-        # ================= 右侧面板 (详细信息) =================
+        # 右侧
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         
@@ -305,11 +291,9 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.info_tag_list)
         
         splitter.addWidget(right_panel)
-        
-        # 比例设置
         splitter.setSizes([250, 800, 250])
 
-    # ================= 数据加载与筛选 =================
+    # ================= 逻辑处理 =================
 
     def refresh_all_data(self):
         self.load_tags_list()
@@ -325,12 +309,9 @@ class MainWindow(QMainWindow):
     def load_folders_list(self):
         self.folder_list_widget.clear()
         folders = self.db.get_all_folders()
-        
-        # 添加一个“全部”选项
         item_all = QListWidgetItem("全部图片")
         item_all.setData(Qt.UserRole, None)
         self.folder_list_widget.addItem(item_all)
-        
         for f in folders:
             item = QListWidgetItem(f)
             item.setData(Qt.UserRole, f)
@@ -339,7 +320,6 @@ class MainWindow(QMainWindow):
     def refresh_image_list(self):
         self.image_list_widget.clear()
         
-        # 获取筛选条件
         filters = {}
         keyword = self.search_input.text().strip()
         if keyword:
@@ -349,16 +329,13 @@ class MainWindow(QMainWindow):
         if selected_tags:
             filters['tags'] = selected_tags
 
-        # 目录筛选
         curr_folder_item = self.folder_list_widget.currentItem()
         if curr_folder_item and curr_folder_item.data(Qt.UserRole):
             filters['exact_dir'] = curr_folder_item.data(Qt.UserRole)
 
-        # 查询
         images, total_count = self.db.get_images_paginated(self.current_page, self.page_size, filters)
         self.total_images = total_count
         
-        # 更新分页控件
         total_pages = (total_count + self.page_size - 1) // self.page_size
         if total_pages == 0: total_pages = 1
         
@@ -369,14 +346,12 @@ class MainWindow(QMainWindow):
         
         self.lbl_total_page.setText(f"/ {total_pages} (Total: {total_count})")
         
-        # 填充列表
         for img in images:
             item = QListWidgetItem(img['file_name'])
             item.setData(Qt.UserRole, img['id'])
             item.setData(Qt.UserRole + 1, img['file_path'])
             self.image_list_widget.addItem(item)
             
-        # 线程加载缩略图
         if images:
             self.load_thumbnails(images)
 
@@ -400,11 +375,8 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def on_file_missing(self, path):
-        # 状态栏提示，但不弹窗打扰
         self.lbl_status.setText(f"移除不存在文件: {os.path.basename(path)}")
-        # 刷新列表可能太频繁，暂时不刷新，等用户翻页自然刷新，或者等线程结束刷新
-        # 如果需要实时刷新界面移除Item，可以在这里做，但需注意索引变化
-        
+
     def apply_filters(self):
         self.current_page = 1
         self.refresh_image_list()
@@ -416,15 +388,42 @@ class MainWindow(QMainWindow):
     def show_folder_menu(self, pos):
         item = self.folder_list_widget.itemAt(pos)
         if not item: return
-        
         dir_path = item.data(Qt.UserRole)
-        if not dir_path: return # "全部"选项不可删
-        
+        if not dir_path: return
         menu = QMenu()
         del_action = QAction(f"从数据库移除: {dir_path}", self)
         del_action.triggered.connect(lambda: self.remove_folder_from_db(dir_path))
         menu.addAction(del_action)
         menu.exec(self.folder_list_widget.mapToGlobal(pos))
+
+    # [NEW] 图片右键菜单
+    def show_image_context_menu(self, pos):
+        item = self.image_list_widget.itemAt(pos)
+        if not item: return
+        
+        file_path = item.data(Qt.UserRole + 1)
+        menu = QMenu()
+        
+        # 复制路径
+        copy_action = QAction("复制完整路径", self)
+        copy_action.triggered.connect(lambda: QApplication.clipboard().setText(file_path))
+        menu.addAction(copy_action)
+        
+        # 打开所在文件夹
+        open_dir_action = QAction("打开所在文件夹", self)
+        open_dir_action.triggered.connect(lambda: self.open_file_location(file_path))
+        menu.addAction(open_dir_action)
+        
+        menu.exec(self.image_list_widget.mapToGlobal(pos))
+
+    def open_file_location(self, path):
+        """打开文件所在的资源管理器并选中"""
+        if os.path.exists(path):
+            try:
+                # Windows 特定命令
+                subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
+            except Exception as e:
+                print(f"Error opening explorer: {e}")
 
     def remove_folder_from_db(self, dir_path):
         reply = QMessageBox.question(self, "确认删除", f"确定移除该文件夹的记录吗?\n{dir_path}\n(本地文件不会被删除)", 
@@ -435,26 +434,19 @@ class MainWindow(QMainWindow):
             self.refresh_image_list()
 
     def on_image_selected(self):
-        """显示右侧详细信息"""
         items = self.image_list_widget.selectedItems()
         self.info_tag_list.clear()
         self.lbl_filename.setText("-")
-        
         if not items: return
-        
-        # 只显示第一个选中的图片信息
         item = items[0]
         img_id = item.data(Qt.UserRole)
         path = item.data(Qt.UserRole + 1)
-        
         self.lbl_filename.setText(os.path.basename(path))
-        
         tags = self.db.get_tags_for_image(img_id)
         for t in tags:
             self.info_tag_list.addItem(f"{t['name']} ({t['confidence']:.2f})")
 
-    # ================= 分页逻辑 =================
-
+    # 分页
     def prev_page(self):
         if self.current_page > 1:
             self.current_page -= 1
@@ -477,12 +469,10 @@ class MainWindow(QMainWindow):
             self.current_page = val
             self.refresh_image_list()
 
-    # ================= 导入与打标 =================
-
+    # 导入与打标
     def open_import_dialog(self):
         folder = QFileDialog.getExistingDirectory(self, "选择图片目录")
         if not folder: return
-
         dialog = ImportDialog(self)
         if dialog.exec():
             data = dialog.get_data()
@@ -492,19 +482,19 @@ class MainWindow(QMainWindow):
         self.import_worker = ImportWorker(self.db_path, [folder], options['recursive'])
         self.import_worker.status_signal.connect(self.lbl_status.setText)
         self.import_worker.progress_signal.connect(lambda c, t: self.lbl_status.setText(f"已导入: {c}"))
-        
-        # 传递 auto_tag 选项给 finish 回调
         self.import_worker.finished_signal.connect(lambda ids: self.on_import_finished(ids, options))
-        
         self.lbl_status.setText("开始扫描...")
         self.import_worker.start()
 
     def on_import_finished(self, new_ids, options):
-        self.lbl_status.setText("导入完成")
+        if not new_ids:
+            QMessageBox.warning(self, "提示", "未找到任何图片！\n请检查文件夹内是否有 .jpg/.png 等支持的图片格式。")
+        else:
+            self.lbl_status.setText(f"导入完成 (新增 {len(new_ids)})")
+            
         self.load_folders_list()
         self.refresh_image_list()
         
-        # 自动打标逻辑
         if options['auto_tag'] and new_ids:
             reply = QMessageBox.question(self, "自动打标", f"导入了 {len(new_ids)} 张图片，是否立即开始 AI 打标?", 
                                          QMessageBox.Yes | QMessageBox.No)
@@ -516,9 +506,7 @@ class MainWindow(QMainWindow):
         if not selected_items:
             QMessageBox.warning(self, "提示", "请先选择要打标的图片")
             return
-            
         ids = [item.data(Qt.UserRole) for item in selected_items]
-        
         dialog = BatchTagDialog(self)
         if dialog.exec():
             data = dialog.get_data()
@@ -526,15 +514,11 @@ class MainWindow(QMainWindow):
 
     def get_ai_engine(self):
         if self.ai_engine: return self.ai_engine
-        
-        # 延迟加载
         from ai_tagger import TaggerEngine
         model_path = os.path.join(self.models_dir, "model.onnx")
         tags_path = os.path.join(self.models_dir, "tag_mapping.json")
-        
         if not os.path.exists(model_path):
             raise FileNotFoundError("Model files missing")
-            
         self.ai_engine = TaggerEngine(model_path, tags_path)
         return self.ai_engine
 
@@ -551,11 +535,9 @@ class MainWindow(QMainWindow):
 
         self.tag_worker = TaggerWorker(self.db_path, ids, mode=method, ai_engine=engine, 
                                        regex_pattern=regex, tag_action=mode)
-        
         self.tag_worker.status_signal.connect(self.lbl_status.setText)
         self.tag_worker.progress_signal.connect(lambda c, t: self.progress_bar.setValue(int(c/t*100)))
         self.tag_worker.finished_signal.connect(self.on_tagging_finished)
-        
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.tag_worker.start()
@@ -565,24 +547,18 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText("打标任务完成")
         QMessageBox.information(self, "完成", "批量打标已完成")
         self.load_tags_list()
-        # 刷新右侧信息
         self.on_image_selected()
 
     def open_viewer(self, item):
         current_id = item.data(Qt.UserRole)
-        
-        # 收集当前页数据
         current_page_images = []
         found_index = 0
-        
         for i in range(self.image_list_widget.count()):
             list_item = self.image_list_widget.item(i)
             img_id = list_item.data(Qt.UserRole)
             img_path = list_item.data(Qt.UserRole + 1)
-            
             current_page_images.append({'id': img_id, 'file_path': img_path})
             if img_id == current_id:
                 found_index = i
-        
         self.viewer = ImageViewerWindow(current_page_images, found_index)
         self.viewer.show()
