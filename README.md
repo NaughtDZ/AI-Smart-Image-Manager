@@ -56,6 +56,8 @@ cd AI-Image-Manager
 ### 2. 准备模型文件 (重要!)
 由于模型文件较大，未包含在仓库中。请前往 HuggingFace 下载兼容 wd14-tagger 的 ONNX 模型。
 
+特别感谢更好的cl-tagger和下载地址：https://huggingface.co/cella110n/cl_tagger
+
 下载 .onnx 模型文件 (例如 wd-v1-4-convnextv2-tagger-v2.onnx)。
 下载对应的标签映射文件 (通常是 selected_tags.csv 或 JSON 格式)。
 将它们重命名并放入 app/models/ 目录：
