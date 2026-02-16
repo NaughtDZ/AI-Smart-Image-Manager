@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QPushButton, QLabel, QListWidget, QListWidgetItem, QFileDialog, 
                                QSplitter, QLineEdit, QProgressBar, QMessageBox, QTabWidget,
                                QDialog, QCheckBox, QRadioButton, QButtonGroup, QFormLayout,
-                               QComboBox, QSpinBox, QMenu)
+                               QComboBox, QSpinBox, QMenu, QInputDialog) # [NEW] Added QInputDialog
 from PySide6.QtCore import Qt, QSize, Slot
 from PySide6.QtGui import QIcon, QAction, QCursor
 
@@ -27,12 +27,12 @@ STYLE_SHEET = """
     QTabBar::tab:selected { background: #444; color: #fff; }
     QGroupBox { border: 1px solid #555; margin-top: 10px; }
     QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; }
-    QMenu { background-color: #333; border: 1px solid #555; }
+    QMenu { background-color: #333; border: 1px solid #555; color: #fff; }
     QMenu::item { padding: 5px 20px; }
     QMenu::item:selected { background-color: #0078d7; }
 """
 
-# ================= 对话框类 =================
+# ================= 对话框类 (保持不变) =================
 
 class ImportDialog(QDialog):
     def __init__(self, parent=None):
@@ -59,12 +59,12 @@ class ImportDialog(QDialog):
         self.rb_append.setChecked(True)
         self.rb_overwrite = QRadioButton("覆盖 (Overwrite)")
         self.rb_unique = QRadioButton("仅添加不重复 (Unique)")
-        self.rb_skip = QRadioButton("跳过已有标签 (Skip)") # [NEW]
+        self.rb_skip = QRadioButton("跳过已有标签 (Skip)")
         
         self.btn_group_mode.addButton(self.rb_append, 0)
         self.btn_group_mode.addButton(self.rb_overwrite, 1)
         self.btn_group_mode.addButton(self.rb_unique, 2)
-        self.btn_group_mode.addButton(self.rb_skip, 3) # [NEW]
+        self.btn_group_mode.addButton(self.rb_skip, 3)
         
         self.tag_layout.addWidget(self.rb_append)
         self.tag_layout.addWidget(self.rb_overwrite)
@@ -89,7 +89,6 @@ class ImportDialog(QDialog):
         self.layout.addLayout(btn_layout)
 
     def get_data(self):
-        # [NEW] 映射增加 skip
         mode_map = {0: 'append', 1: 'overwrite', 2: 'unique', 3: 'skip'}
         return {
             'recursive': self.chk_recursive.isChecked(),
@@ -128,12 +127,12 @@ class BatchTagDialog(QDialog):
         self.rb_append.setChecked(True)
         self.rb_overwrite = QRadioButton("覆盖 (Overwrite)")
         self.rb_unique = QRadioButton("仅添加不重复 (Unique)")
-        self.rb_skip = QRadioButton("跳过已有标签 (Skip)") # [NEW]
+        self.rb_skip = QRadioButton("跳过已有标签 (Skip)")
         
         self.btn_group.addButton(self.rb_append, 0)
         self.btn_group.addButton(self.rb_overwrite, 1)
         self.btn_group.addButton(self.rb_unique, 2)
-        self.btn_group.addButton(self.rb_skip, 3) # [NEW]
+        self.btn_group.addButton(self.rb_skip, 3)
         
         self.layout.addWidget(self.rb_append)
         self.layout.addWidget(self.rb_overwrite)
@@ -193,7 +192,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         main_layout.addWidget(splitter)
         
-        # 左侧面板
+        # 左侧
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -207,7 +206,7 @@ class MainWindow(QMainWindow):
         tool_layout.addWidget(btn_batch)
         left_layout.addLayout(tool_layout)
         
-        # [NEW] 搜索栏 + 重置按钮
+        # 搜索与重置
         search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索文件名...")
@@ -255,7 +254,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.left_tabs)
         splitter.addWidget(left_panel)
         
-        # 中间面板
+        # 中间
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
         
@@ -315,7 +314,7 @@ class MainWindow(QMainWindow):
         
         splitter.addWidget(center_panel)
         
-        # 右侧面板
+        # 右侧
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         
@@ -326,7 +325,15 @@ class MainWindow(QMainWindow):
         
         right_layout.addWidget(QLabel("<b>当前标签:</b>"))
         self.info_tag_list = QListWidget()
+        # [NEW] 允许右键菜单
+        self.info_tag_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.info_tag_list.customContextMenuRequested.connect(self.show_tag_context_menu)
         right_layout.addWidget(self.info_tag_list)
+        
+        # [NEW] 添加标签按钮
+        btn_add_tag = QPushButton("手动添加标签")
+        btn_add_tag.clicked.connect(self.manual_add_tag)
+        right_layout.addWidget(btn_add_tag)
         
         splitter.addWidget(right_panel)
         splitter.setSizes([250, 800, 250])
@@ -369,20 +376,17 @@ class MainWindow(QMainWindow):
             item = self.folder_list_widget.item(i)
             item.setHidden(search_text not in item.text().lower())
 
-    # [NEW] 一键清除所有筛选
     def clear_all_filters(self):
         self.search_input.clear()
         self.tag_search.clear()
         self.folder_search.clear()
         
-        # 取消列表选择（blockSignals防止触发多次refresh）
         self.tag_list_widget.blockSignals(True)
         self.tag_list_widget.clearSelection()
         self.tag_list_widget.blockSignals(False)
         
         self.folder_list_widget.blockSignals(True)
         self.folder_list_widget.clearSelection()
-        # 还要重置 "全部图片" 的选中状态
         if self.folder_list_widget.count() > 0:
             self.folder_list_widget.item(0).setSelected(True)
         self.folder_list_widget.blockSignals(False)
@@ -424,7 +428,7 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, img['id'])
             item.setData(Qt.UserRole + 1, img['file_path'])
             self.image_list_widget.addItem(item)
-        # [FIX] 强制刷新布局，解决图片重叠问题
+            
         self.image_list_widget.doItemsLayout()
         if self.image_list_widget.count() > 0:
             self.image_list_widget.scrollToItem(self.image_list_widget.item(0))
@@ -510,13 +514,65 @@ class MainWindow(QMainWindow):
         self.info_tag_list.clear()
         self.lbl_filename.setText("-")
         if not items: return
+        
+        # 只取第一个选中
         item = items[0]
         img_id = item.data(Qt.UserRole)
         path = item.data(Qt.UserRole + 1)
+        
         self.lbl_filename.setText(os.path.basename(path))
+        
         tags = self.db.get_tags_for_image(img_id)
         for t in tags:
-            self.info_tag_list.addItem(f"{t['name']} ({t['confidence']:.2f})")
+            # item text 包含置信度
+            list_item = QListWidgetItem(f"{t['name']} ({t['confidence']:.2f})")
+            # [NEW] 存入纯 Tag 名称，方便后续删除
+            list_item.setData(Qt.UserRole, t['name'])
+            self.info_tag_list.addItem(list_item)
+
+    # [NEW] 手动添加标签逻辑
+    def manual_add_tag(self):
+        items = self.image_list_widget.selectedItems()
+        if not items:
+            QMessageBox.warning(self, "提示", "请先选择一张图片")
+            return
+            
+        img_id = items[0].data(Qt.UserRole)
+        
+        tag_name, ok = QInputDialog.getText(self, "添加标签", "输入标签名称:")
+        if ok and tag_name.strip():
+            # 默认人工打标置信度 1.0, 非 AI
+            self.db.add_image_tag(img_id, tag_name.strip(), confidence=1.0, is_prediction=0, mode='append')
+            
+            # 刷新右侧信息
+            self.on_image_selected()
+            
+            # 刷新左侧大列表 (如果加了新Tag)
+            self.load_tags_list()
+
+    # [NEW] 右键删除标签逻辑
+    def show_tag_context_menu(self, pos):
+        item = self.info_tag_list.itemAt(pos)
+        if not item: return
+        
+        tag_name = item.data(Qt.UserRole)
+        
+        menu = QMenu()
+        del_action = QAction(f"删除标签: {tag_name}", self)
+        del_action.triggered.connect(lambda: self.manual_remove_tag(tag_name))
+        menu.addAction(del_action)
+        
+        menu.exec(self.info_tag_list.mapToGlobal(pos))
+
+    def manual_remove_tag(self, tag_name):
+        items = self.image_list_widget.selectedItems()
+        if not items: return
+        
+        img_id = items[0].data(Qt.UserRole)
+        
+        self.db.remove_image_tag(img_id, tag_name)
+        # 刷新右侧信息
+        self.on_image_selected()
 
     def prev_page(self):
         if self.current_page > 1:

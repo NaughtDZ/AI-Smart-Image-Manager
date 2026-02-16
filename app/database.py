@@ -4,37 +4,20 @@ from typing import List, Tuple, Optional, Dict
 
 class ImageDB:
     def __init__(self, db_path: str = "images.db"):
-        # 1. 强制转换为绝对路径，解决相对路径解析问题
         self.db_path = os.path.abspath(db_path)
         print(f"[DB] Initialized at: {self.db_path}")
         self.init_db()
 
     def get_connection(self):
         conn = sqlite3.connect(self.db_path)
-        
-        # 1. 开启外键支持
         conn.execute("PRAGMA foreign_keys = ON")
-        
-        # 2. 【性能核心】开启 WAL 模式
-        # 允许读写并发，大幅提升吞吐量
         conn.execute("PRAGMA journal_mode=WAL")
-        
-        # 3. 【速度核心】降低磁盘同步频率
-        # NORMAL 模式在大多数情况下是安全的，但在断电时可能丢失刚写入的几条数据
-        # 换来的是写入速度提升 10 倍以上
         conn.execute("PRAGMA synchronous=NORMAL")
-        
-        # 4. 【大文件优化】开启内存映射 IO
-        # 允许 SQLite 使用内存映射访问 2GB+ 的数据库文件
         conn.execute("PRAGMA mmap_size=30000000000") 
-        
-        # 5. 增加缓存大小 (单位是 page，默认 2000，设为 64000 约占用 256MB 内存)
-        # 牺牲一点内存换取查询速度
         conn.execute("PRAGMA cache_size=-64000") 
-        
         conn.row_factory = sqlite3.Row
         return conn
-        
+
     def init_db(self):
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -58,7 +41,6 @@ class ImageDB:
             )
         ''')
 
-        # 图片-标签关联表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS image_tags (
                 image_id INTEGER,
@@ -71,35 +53,22 @@ class ImageDB:
             )
         ''')
         
-        # =========================================================
-        # 【关键优化】千万级数据必须加的索引
-        # =========================================================
-        
-        # 1. 优化 "根据 Tag 找图片" 的速度
-        # 如果没有这个索引，查询 "所有含 'cat' 的图" 会全表扫描 3 亿行数据
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_image_tags_tag_id ON image_tags (tag_id)')
-        
-        # 2. 优化 "按文件名搜索" 的速度
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_file_name ON images (file_name)')
-        
-        # 3. 优化 "按目录筛选" 的速度
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_images_dir_path ON images (dir_path)')
-        
         
         conn.commit()
         conn.close()
 
-    # ================= 优化后的图片操作 =================
+    # ================= 图片操作 =================
 
     def add_image(self, file_path: str, file_name: str, dir_path: str, size: int = 0) -> int:
-        """单条插入 (用于单个文件变动)"""
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("INSERT OR IGNORE INTO images (file_path, file_name, dir_path, file_size) VALUES (?, ?, ?, ?)", 
                            (file_path, file_name, dir_path, size))
             conn.commit()
-            
             cursor.execute("SELECT id FROM images WHERE file_path = ?", (file_path,))
             row = cursor.fetchone()
             return row['id'] if row else -1
@@ -110,10 +79,7 @@ class ImageDB:
             conn.close()
 
     def get_connection_for_batch(self):
-        """提供给外部 Worker 使用的长连接"""
         return self.get_connection()
-
-    # ================= 删除与查询 =================
 
     def delete_image_by_id(self, image_id: int):
         conn = self.get_connection()
@@ -184,7 +150,6 @@ class ImageDB:
     # ================= Tag 操作 =================
 
     def add_tag(self, tag_name: str) -> int:
-        # 这里为了简化，每次都开链接，Tag 通常数量少
         conn = self.get_connection()
         cursor = conn.cursor()
         try:
@@ -220,6 +185,17 @@ class ImageDB:
                 VALUES (?, ?, ?, ?)
             """, (image_id, tag_id, confidence, is_prediction))
         
+        conn.commit()
+        conn.close()
+
+    # [NEW] 移除特定 Tag
+    def remove_image_tag(self, image_id: int, tag_name: str):
+        conn = self.get_connection()
+        # 子查询找到 tag_id 然后删除关联
+        conn.execute('''
+            DELETE FROM image_tags 
+            WHERE image_id = ? AND tag_id = (SELECT id FROM tags WHERE name = ?)
+        ''', (image_id, tag_name))
         conn.commit()
         conn.close()
         
