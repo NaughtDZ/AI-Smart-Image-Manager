@@ -38,7 +38,7 @@ class ImportDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("导入选项")
-        self.resize(400, 300)
+        self.resize(400, 350)
         self.layout = QVBoxLayout(self)
         
         self.chk_recursive = QCheckBox("递归扫描子目录")
@@ -54,17 +54,22 @@ class ImportDialog(QDialog):
         self.lbl_mode = QLabel("打标模式:")
         self.tag_layout.addWidget(self.lbl_mode)
         self.btn_group_mode = QButtonGroup(self)
+        
         self.rb_append = QRadioButton("追加 (Append)")
         self.rb_append.setChecked(True)
         self.rb_overwrite = QRadioButton("覆盖 (Overwrite)")
         self.rb_unique = QRadioButton("仅添加不重复 (Unique)")
+        self.rb_skip = QRadioButton("跳过已有标签 (Skip)") # [NEW]
+        
         self.btn_group_mode.addButton(self.rb_append, 0)
         self.btn_group_mode.addButton(self.rb_overwrite, 1)
         self.btn_group_mode.addButton(self.rb_unique, 2)
+        self.btn_group_mode.addButton(self.rb_skip, 3) # [NEW]
         
         self.tag_layout.addWidget(self.rb_append)
         self.tag_layout.addWidget(self.rb_overwrite)
         self.tag_layout.addWidget(self.rb_unique)
+        self.tag_layout.addWidget(self.rb_skip)
 
         self.lbl_type = QLabel("注意：导入时仅支持 AI 自动打标")
         self.tag_layout.addWidget(self.lbl_type)
@@ -84,7 +89,8 @@ class ImportDialog(QDialog):
         self.layout.addLayout(btn_layout)
 
     def get_data(self):
-        mode_map = {0: 'append', 1: 'overwrite', 2: 'unique'}
+        # [NEW] 映射增加 skip
+        mode_map = {0: 'append', 1: 'overwrite', 2: 'unique', 3: 'skip'}
         return {
             'recursive': self.chk_recursive.isChecked(),
             'auto_tag': self.group_tag.isChecked(),
@@ -95,7 +101,7 @@ class BatchTagDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("批量打标")
-        self.resize(400, 350)
+        self.resize(400, 400)
         self.layout = QVBoxLayout(self)
         
         self.cmb_method = QComboBox()
@@ -117,17 +123,22 @@ class BatchTagDialog(QDialog):
 
         self.layout.addWidget(QLabel("写入模式:"))
         self.btn_group = QButtonGroup(self)
+        
         self.rb_append = QRadioButton("追加 (Append)")
         self.rb_append.setChecked(True)
         self.rb_overwrite = QRadioButton("覆盖 (Overwrite)")
         self.rb_unique = QRadioButton("仅添加不重复 (Unique)")
+        self.rb_skip = QRadioButton("跳过已有标签 (Skip)") # [NEW]
+        
         self.btn_group.addButton(self.rb_append, 0)
         self.btn_group.addButton(self.rb_overwrite, 1)
         self.btn_group.addButton(self.rb_unique, 2)
+        self.btn_group.addButton(self.rb_skip, 3) # [NEW]
         
         self.layout.addWidget(self.rb_append)
         self.layout.addWidget(self.rb_overwrite)
         self.layout.addWidget(self.rb_unique)
+        self.layout.addWidget(self.rb_skip)
         
         btn_layout = QHBoxLayout()
         btn_ok = QPushButton("开始")
@@ -143,7 +154,7 @@ class BatchTagDialog(QDialog):
         self.regex_widget.setVisible(is_regex)
 
     def get_data(self):
-        mode_map = {0: 'append', 1: 'overwrite', 2: 'unique'}
+        mode_map = {0: 'append', 1: 'overwrite', 2: 'unique', 3: 'skip'}
         return {
             'method': self.cmb_method.currentData(),
             'regex': self.regex_input.text(),
@@ -182,7 +193,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         main_layout.addWidget(splitter)
         
-        # 左侧
+        # 左侧面板
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -196,27 +207,55 @@ class MainWindow(QMainWindow):
         tool_layout.addWidget(btn_batch)
         left_layout.addLayout(tool_layout)
         
+        # [NEW] 搜索栏 + 重置按钮
+        search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索文件名...")
         self.search_input.returnPressed.connect(self.apply_filters)
-        left_layout.addWidget(self.search_input)
+        
+        btn_reset = QPushButton("重置筛选")
+        btn_reset.setToolTip("清除所有筛选条件 (关键词、标签、目录)")
+        btn_reset.clicked.connect(self.clear_all_filters)
+        
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(btn_reset)
+        left_layout.addLayout(search_layout)
         
         self.left_tabs = QTabWidget()
+        
+        # 标签页
+        tab_tags = QWidget()
+        tags_layout = QVBoxLayout(tab_tags)
+        tags_layout.setContentsMargins(0, 5, 0, 0)
+        self.tag_search = QLineEdit()
+        self.tag_search.setPlaceholderText("筛选标签...")
+        self.tag_search.textChanged.connect(self.filter_tag_list)
+        tags_layout.addWidget(self.tag_search)
         self.tag_list_widget = QListWidget()
         self.tag_list_widget.setSelectionMode(QListWidget.MultiSelection)
         self.tag_list_widget.itemSelectionChanged.connect(self.apply_filters)
-        self.left_tabs.addTab(self.tag_list_widget, "标签")
+        tags_layout.addWidget(self.tag_list_widget)
+        self.left_tabs.addTab(tab_tags, "标签")
         
+        # 文件夹页
+        tab_folders = QWidget()
+        folders_layout = QVBoxLayout(tab_folders)
+        folders_layout.setContentsMargins(0, 5, 0, 0)
+        self.folder_search = QLineEdit()
+        self.folder_search.setPlaceholderText("筛选文件夹...")
+        self.folder_search.textChanged.connect(self.filter_folder_list)
+        folders_layout.addWidget(self.folder_search)
         self.folder_list_widget = QListWidget()
         self.folder_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.folder_list_widget.customContextMenuRequested.connect(self.show_folder_menu)
         self.folder_list_widget.itemClicked.connect(self.on_folder_clicked)
-        self.left_tabs.addTab(self.folder_list_widget, "文件夹")
+        folders_layout.addWidget(self.folder_list_widget)
+        self.left_tabs.addTab(tab_folders, "文件夹")
         
         left_layout.addWidget(self.left_tabs)
         splitter.addWidget(left_panel)
         
-        # 中间
+        # 中间面板
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
         
@@ -269,7 +308,6 @@ class MainWindow(QMainWindow):
         self.image_list_widget.itemDoubleClicked.connect(self.open_viewer)
         self.image_list_widget.itemSelectionChanged.connect(self.on_image_selected)
         
-        # [NEW] 启用右键菜单
         self.image_list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
         self.image_list_widget.customContextMenuRequested.connect(self.show_image_context_menu)
         
@@ -277,7 +315,7 @@ class MainWindow(QMainWindow):
         
         splitter.addWidget(center_panel)
         
-        # 右侧
+        # 右侧面板
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         
@@ -305,6 +343,7 @@ class MainWindow(QMainWindow):
         tags = self.db.get_all_tags()
         for tag in tags:
             self.tag_list_widget.addItem(tag)
+        self.filter_tag_list(self.tag_search.text())
             
     def load_folders_list(self):
         self.folder_list_widget.clear()
@@ -316,6 +355,40 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(f)
             item.setData(Qt.UserRole, f)
             self.folder_list_widget.addItem(item)
+        self.filter_folder_list(self.folder_search.text())
+
+    def filter_tag_list(self, text):
+        search_text = text.lower()
+        for i in range(self.tag_list_widget.count()):
+            item = self.tag_list_widget.item(i)
+            item.setHidden(search_text not in item.text().lower())
+
+    def filter_folder_list(self, text):
+        search_text = text.lower()
+        for i in range(self.folder_list_widget.count()):
+            item = self.folder_list_widget.item(i)
+            item.setHidden(search_text not in item.text().lower())
+
+    # [NEW] 一键清除所有筛选
+    def clear_all_filters(self):
+        self.search_input.clear()
+        self.tag_search.clear()
+        self.folder_search.clear()
+        
+        # 取消列表选择（blockSignals防止触发多次refresh）
+        self.tag_list_widget.blockSignals(True)
+        self.tag_list_widget.clearSelection()
+        self.tag_list_widget.blockSignals(False)
+        
+        self.folder_list_widget.blockSignals(True)
+        self.folder_list_widget.clearSelection()
+        # 还要重置 "全部图片" 的选中状态
+        if self.folder_list_widget.count() > 0:
+            self.folder_list_widget.item(0).setSelected(True)
+        self.folder_list_widget.blockSignals(False)
+        
+        self.current_page = 1
+        self.refresh_image_list()
 
     def refresh_image_list(self):
         self.image_list_widget.clear()
@@ -351,7 +424,11 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, img['id'])
             item.setData(Qt.UserRole + 1, img['file_path'])
             self.image_list_widget.addItem(item)
-            
+        # [FIX] 强制刷新布局，解决图片重叠问题
+        self.image_list_widget.doItemsLayout()
+        if self.image_list_widget.count() > 0:
+            self.image_list_widget.scrollToItem(self.image_list_widget.item(0))
+
         if images:
             self.load_thumbnails(images)
 
@@ -396,7 +473,6 @@ class MainWindow(QMainWindow):
         menu.addAction(del_action)
         menu.exec(self.folder_list_widget.mapToGlobal(pos))
 
-    # [NEW] 图片右键菜单
     def show_image_context_menu(self, pos):
         item = self.image_list_widget.itemAt(pos)
         if not item: return
@@ -404,12 +480,10 @@ class MainWindow(QMainWindow):
         file_path = item.data(Qt.UserRole + 1)
         menu = QMenu()
         
-        # 复制路径
         copy_action = QAction("复制完整路径", self)
         copy_action.triggered.connect(lambda: QApplication.clipboard().setText(file_path))
         menu.addAction(copy_action)
         
-        # 打开所在文件夹
         open_dir_action = QAction("打开所在文件夹", self)
         open_dir_action.triggered.connect(lambda: self.open_file_location(file_path))
         menu.addAction(open_dir_action)
@@ -417,10 +491,8 @@ class MainWindow(QMainWindow):
         menu.exec(self.image_list_widget.mapToGlobal(pos))
 
     def open_file_location(self, path):
-        """打开文件所在的资源管理器并选中"""
         if os.path.exists(path):
             try:
-                # Windows 特定命令
                 subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
             except Exception as e:
                 print(f"Error opening explorer: {e}")
@@ -446,7 +518,6 @@ class MainWindow(QMainWindow):
         for t in tags:
             self.info_tag_list.addItem(f"{t['name']} ({t['confidence']:.2f})")
 
-    # 分页
     def prev_page(self):
         if self.current_page > 1:
             self.current_page -= 1
@@ -469,7 +540,6 @@ class MainWindow(QMainWindow):
             self.current_page = val
             self.refresh_image_list()
 
-    # 导入与打标
     def open_import_dialog(self):
         folder = QFileDialog.getExistingDirectory(self, "选择图片目录")
         if not folder: return
