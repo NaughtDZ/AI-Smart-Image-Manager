@@ -1,5 +1,5 @@
 # 🖼️ AI Smart Image Manager (本地 AI 图片管理工具)
-#此项目过于粗糙，先已转移至新的项目：https://github.com/NaughtDZ/ImageDB
+# 此项目过于粗糙，先已转移至新的项目：https://github.com/NaughtDZ/ImageDB
 一个基于 **Python + PySide6 + SQLite** 构建的轻量级、高性能本地图片管理软件。
 它利用 **ONNX Runtime (DirectML)** 进行 GPU 加速的 AI 自动打标，无需复杂的 CUDA 配置，支持 NVIDIA/AMD/Intel 显卡。
 
